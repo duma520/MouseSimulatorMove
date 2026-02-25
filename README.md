@@ -1,6 +1,6 @@
 # 软件截图 v2.0
 
-<img width="566" height="689" alt="image" src="https://github.com/user-attachments/assets/d7613c00-61ef-4512-9e79-85c81248c4eb" />
+<img width="566" height="689" alt="image" src="https://github.com/user-attachments/assets/aea15990-af51-439c-abb3-105fedb5a3f0" />
 
 <img width="566" height="689" alt="image" src="https://github.com/user-attachments/assets/e91de8bf-6ead-4c72-b2d9-1bd59e25522e" />
 
