@@ -1,12 +1,13 @@
 # 软件截图 v2.0
 
-<img width="566" height="689" alt="image" src="https://github.com/user-attachments/assets/aea15990-af51-439c-abb3-105fedb5a3f0" />
+<img width="566" height="689" alt="image" src="https://github.com/user-attachments/assets/de462a5c-d343-4980-9275-c8ae691d8bb4" />
 
-<img width="566" height="689" alt="image" src="https://github.com/user-attachments/assets/e91de8bf-6ead-4c72-b2d9-1bd59e25522e" />
+<img width="566" height="689" alt="image" src="https://github.com/user-attachments/assets/578ae15b-a85c-4383-b99f-9cb0ce5201b1" />
 
-<img width="566" height="689" alt="image" src="https://github.com/user-attachments/assets/a4ea1e26-2cb3-4c82-bdcf-f5cb19a1946d" />
+<img width="566" height="689" alt="image" src="https://github.com/user-attachments/assets/0f0290b0-e3d8-472e-b427-309c9551dbc6" />
 
-<img width="566" height="689" alt="image" src="https://github.com/user-attachments/assets/2293170d-cff1-443b-af39-75e65105ffe3" />
+<img width="566" height="689" alt="image" src="https://github.com/user-attachments/assets/53f463c1-8bbd-4fc6-8aea-e6cd9b4b442f" />
+
 
 # 鼠标抖动模拟器
 ## 全方位使用指南与技术白皮书
