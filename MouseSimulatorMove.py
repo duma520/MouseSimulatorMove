@@ -9,14 +9,124 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHBoxLayout, QGroupBox, QLabel, QSpinBox, 
                              QComboBox, QPushButton, QCheckBox, QTextEdit,
                              QMessageBox, QSlider, QTabWidget, QGridLayout, QFrame,
-                             QProgressBar)
+                             QProgressBar, QSystemTrayIcon, QMenu, QAction,
+                             QTextBrowser)  
 from PyQt5.QtCore import (Qt, QThread, pyqtSignal, QTimer, QSettings, 
-                          QPoint, QRect)
+                          QPoint, QRect, QDate, QCoreApplication)
 from PyQt5.QtGui import (QIcon, QFont, QPalette, QColor, QTextCursor,
                          QCloseEvent, QMouseEvent)
 import win32api
 import win32con
 import win32gui
+
+# 尝试导入Windows任务栏相关模块
+try:
+    from PyQt5.QtWinExtras import QWinTaskbarButton, QWinTaskbarProgress
+    HAS_WIN_EXTRAS = True
+    print("✓ PyQt5.QtWinExtras 模块可用 - 支持任务栏进度条")
+except ImportError as e:
+    HAS_WIN_EXTRAS = False
+    print(f"✗ PyQt5.QtWinExtras 模块不可用 - 任务栏进度条功能将禁用: {e}")
+
+class ProjectInfo:
+    """项目信息元数据（集中管理所有项目相关信息）"""
+    VERSION = "3.0.1"
+    BUILD_DATE = "2026-02-26"
+    # from datetime import datetime
+    # BUILD_DATE = datetime.now().strftime("%Y-%m-%d")  # 修改为动态获取当前日期
+    AUTHOR = "杜玛"
+    LICENSE = "MIT"
+    COPYRIGHT = "© 永久 杜玛"
+    URL = "https://github.com/duma520"
+    MAINTAINER_EMAIL = "不提供"
+    NAME = "鼠标抖动模拟器"
+    DESCRIPTION = """鼠标抖动模拟器
+主要功能：
+1. 定时移动鼠标防止系统休眠
+2. 支持8个方向移动（含对角线）
+3. 可自定义移动间隔、方向和距离
+4. 实时显示运行状态和进度
+5. 支持Windows任务栏进度条显示
+6. 系统托盘图标支持
+7. 自动保存和加载设置
+8. 详细的运行统计信息
+9. 多线程处理，界面无卡顿
+10. 适应各种分辨率显示
+"""
+
+
+    VERSION_HISTORY = {
+        "1.0.0": "初始版本 - 基本鼠标移动功能",
+        "2.2.0": "增加8方向移动和统计功能",
+        "3.0.0": "增加任务栏进度条和系统托盘",
+        "3.0.1": "修复已知问题，优化用户体验"
+    }
+    HELP_TEXT = """
+基本操作指南：
+1. 设置移动间隔（5-3600秒）
+2. 选择移动方向（随机或指定方向）
+3. 设置移动距离（1-10像素）
+4. 点击"开始运行"按钮启动
+5. 程序会在后台定时移动鼠标
+6. 可随时暂停或停止运行
+7. 最小化到系统托盘可后台运行
+
+高级功能：
+- 任务栏进度条：显示下次移动倒计时
+- 系统托盘：最小化到托盘，右键菜单控制
+- 自动启动：启动时自动运行
+- 详细统计：记录各方向移动次数
+- 运行日志：记录所有操作事件
+
+注意事项：
+- 移动距离为1像素，肉眼难以察觉
+- 每次移动后会立即返回原位
+- 对正常使用电脑无影响
+- 关闭窗口可选择退出或最小化到托盘
+"""
+
+
+    @classmethod
+    def get_metadata(cls) -> dict:
+        """获取主要元数据字典"""
+        return {
+            'version': cls.VERSION,
+            'author': cls.AUTHOR,
+            'license': cls.LICENSE,
+            'url': cls.URL
+        }
+
+
+    @classmethod
+    def get_header(cls) -> str:
+        """生成标准化的项目头信息"""
+        return f"{cls.NAME} {cls.VERSION} | {cls.LICENSE} License | {cls.URL}"
+
+
+
+    @classmethod
+    def get_about_info(cls):
+        """获取ABOUT信息字典"""
+        return {
+            "name": cls.NAME,
+            "version": cls.VERSION,
+            "build_date": cls.BUILD_DATE,
+            "author": cls.AUTHOR,
+            "license": cls.LICENSE,
+            "copyright": cls.COPYRIGHT,
+            "url": cls.URL,
+            "description": cls.DESCRIPTION,
+            "features": [
+                "定时移动鼠标防止系统休眠",
+                "支持8个方向移动（含对角线）",
+                "Windows任务栏进度条显示",
+                "系统托盘图标支持",
+                "详细的运行统计信息",
+                "自动保存和加载设置"
+            ]
+        }
+
+
 
 class MouseSimulatorThread(QThread):
     """鼠标模拟线程"""
@@ -24,6 +134,7 @@ class MouseSimulatorThread(QThread):
     update_count = pyqtSignal(int)
     update_next_time = pyqtSignal(str)
     update_direction = pyqtSignal(str)
+    update_progress_value = pyqtSignal(int)  # 新增：进度值信号
     
     def __init__(self):
         super().__init__()
@@ -116,20 +227,22 @@ class MouseSimulatorThread(QThread):
                     next_time_str = datetime.fromtimestamp(
                         self.next_move_time).strftime("%H:%M:%S")
                     self.update_next_time.emit(next_time_str)
+                    
+                    # 重置进度条
+                    self.update_progress_value.emit(0)
                 
-                # 等待间隔时间
-                for _ in range(self.interval * 10):  # 分成小段等待，便于及时响应停止
-                    if not self.is_running:
-                        return
+                # 等待间隔时间，同时更新进度
+                start_wait = time.time()
+                while self.is_running and time.time() - start_wait < self.interval:
                     if self.is_paused:
-                        # 暂停时不断检查
                         time.sleep(0.1)
                     else:
+                        # 计算并发送进度
+                        elapsed = time.time() - start_wait
+                        progress = int((elapsed / self.interval) * 100)
+                        self.update_progress_value.emit(min(progress, 99))
                         time.sleep(0.1)
-                        # 检查是否该移动了（用于精确计时）
-                        if time.time() >= self.next_move_time:
-                            break
-                            
+                        
             except Exception as e:
                 self.update_status.emit(f"错误: {str(e)}")
                 time.sleep(1)
@@ -156,6 +269,7 @@ class SettingsManager:
             "move_distance": 1,
             "auto_start": False,
             "show_notifications": True,
+            "show_taskbar_progress": True,  # 新增：任务栏进度条显示选项
             "window_geometry": None,
             "window_state": None
         }
@@ -193,6 +307,11 @@ class MainWindow(QMainWindow):
         self.settings_manager = SettingsManager()
         self.settings = self.settings_manager.load_settings()
         self.mouse_thread = MouseSimulatorThread()
+        
+        # 任务栏进度条相关
+        self.taskbar_button = None
+        self.taskbar_progress = None
+        
         self.init_ui()
         self.load_settings_to_ui()
         self.setup_signals()
@@ -208,8 +327,8 @@ class MainWindow(QMainWindow):
         
     def init_ui(self):
         """初始化UI"""
-        self.setWindowTitle("鼠标模拟器 - 防止休眠")
-        self.setMinimumSize(550, 650)
+        self.setWindowTitle(f"{ProjectInfo.NAME} {ProjectInfo.VERSION} (Build: {ProjectInfo.BUILD_DATE})")
+        self.setMinimumSize(550, 700)
         
         # 设置应用样式
         self.setStyleSheet("""
@@ -403,7 +522,7 @@ class MainWindow(QMainWindow):
         
         control_layout.addWidget(status_group)
         
-        # 进度条
+        # 进度条组
         progress_group = QGroupBox("进度")
         progress_layout = QVBoxLayout(progress_group)
         
@@ -529,48 +648,97 @@ class MainWindow(QMainWindow):
         
         # 关于标签页布局
         about_layout = QVBoxLayout(about_tab)
-        
-        about_text = QTextEdit()
+
+        about_text = QTextBrowser()
         about_text.setReadOnly(True)
         about_text.setStyleSheet("background-color: white;")
-        about_text.setHtml("""
-        <div style='padding: 15px;'>
-            <h2 style='color: #4CAF50;'>鼠标模拟器 v1.1</h2>
-            <p style='color: #666; font-size: 12px;'>防止系统休眠，保持网页活跃状态</p>
-            
-            <h3 style='color: #333;'>功能特点：</h3>
-            <ul style='color: #666;'>
-                <li>定时移动鼠标1像素并返回原位</li>
-                <li><b>新增：支持8个方向移动（含对角线）</b></li>
-                <li>支持自定义移动间隔、方向和距离</li>
-                <li>多线程处理，界面无卡顿</li>
-                <li>实时显示运行状态和进度</li>
-                <li>自动保存设置，下次启动加载</li>
-                <li>适应各种分辨率显示</li>
-            </ul>
-            
-            <h3 style='color: #333;'>使用方法：</h3>
-            <ol style='color: #666;'>
-                <li>设置移动间隔和方向</li>
-                <li>点击"开始运行"按钮</li>
-                <li>程序会在后台自动移动鼠标</li>
-                <li>可随时暂停或停止运行</li>
-            </ol>
-            
-            <h3 style='color: #333;'>注意事项：</h3>
-            <ul style='color: #666;'>
-                <li>移动距离为1像素，肉眼难以察觉</li>
-                <li>每次移动后会立即返回原位</li>
-                <li>对正常使用电脑无影响</li>
-                <li>关闭窗口即退出程序</li>
-            </ul>
-            
-            <p style='color: #999; text-align: center; margin-top: 20px;'>
-                © 2024 鼠标模拟器 v1.1<br>
-                保留所有权利
+
+        # 获取项目信息
+        project_info = ProjectInfo.get_about_info()
+
+        # 生成版本历史HTML
+        version_history_html = ""
+        for version, description in ProjectInfo.VERSION_HISTORY.items():
+            version_history_html += f"<li><b>{version}</b>: {description}</li>"
+
+        # 生成功能列表HTML
+        features_html = ""
+        for feature in project_info["features"]:
+            features_html += f"<li>{feature}</li>"
+
+        # 设置HTML内容
+        about_text.setHtml(f"""
+        <div style='padding: 20px; font-family: "Microsoft YaHei", Arial, sans-serif;'>
+            <h1 style='color: #4CAF50; text-align: center; margin-bottom: 5px;'>{project_info['name']}</h1>
+            <p style='color: #666; text-align: center; font-size: 14px; margin-top: 0;'>
+                版本 {project_info['version']} | 构建日期 {project_info['build_date']}
             </p>
+            
+            <div style='background-color: #f8f9fa; padding: 15px; border-radius: 5px; margin: 15px 0;'>
+                <p style='color: #555; line-height: 1.6; white-space: pre-line;'>{project_info['description']}</p>
+            </div>
+            
+            <div style='display: flex; flex-wrap: wrap; gap: 20px; margin: 20px 0;'>
+                <div style='flex: 1; min-width: 250px;'>
+                    <h3 style='color: #333; border-bottom: 2px solid #4CAF50; padding-bottom: 5px;'>📋 项目信息</h3>
+                    <table style='width: 100%; border-collapse: collapse; color: #555;'>
+                        <tr>
+                            <td style='padding: 6px 0; font-weight: bold; width: 80px;'>作者:</td>
+                            <td style='padding: 6px 0;'>{project_info['author']}</td>
+                        </tr>
+                        <tr>
+                            <td style='padding: 6px 0; font-weight: bold;'>许可证:</td>
+                            <td style='padding: 6px 0;'>{project_info['license']}</td>
+                        </tr>
+                        <tr>
+                            <td style='padding: 6px 0; font-weight: bold;'>版权:</td>
+                            <td style='padding: 6px 0;'>{project_info['copyright']}</td>
+                        </tr>
+                        <tr>
+                            <td style='padding: 6px 0; font-weight: bold;'>网址:</td>
+                            <td style='padding: 6px 0;'>
+                                <a href="{project_info['url']}" style='color: #2196F3; text-decoration: none;'>
+                                    {project_info['url']}
+                                </a>
+                            </td>
+                        </tr>
+                    </table>
+                </div>
+                
+                <div style='flex: 1; min-width: 250px;'>
+                    <h3 style='color: #333; border-bottom: 2px solid #4CAF50; padding-bottom: 5px;'>✨ 主要功能</h3>
+                    <ul style='color: #555; padding-left: 20px; margin-top: 5px;'>
+                        {features_html}
+                    </ul>
+                </div>
+            </div>
+            
+            <div style='margin: 20px 0;'>
+                <h3 style='color: #333; border-bottom: 2px solid #4CAF50; padding-bottom: 5px;'>📜 版本历史</h3>
+                <ul style='color: #555; padding-left: 20px;'>
+                    {version_history_html}
+                </ul>
+            </div>
+            
+            <div style='margin: 20px 0;'>
+                <h3 style='color: #333; border-bottom: 2px solid #4CAF50; padding-bottom: 5px;'>📖 使用帮助</h3>
+                <div style='color: #555; line-height: 1.6; white-space: pre-line; padding: 10px; background-color: #f8f9fa; border-radius: 5px;'>
+                    {ProjectInfo.HELP_TEXT}
+                </div>
+            </div>
+            
+            <div style='text-align: center; margin-top: 30px; padding-top: 20px; border-top: 1px solid #eee;'>
+                <p style='color: #999; font-size: 12px;'>
+                    {project_info['copyright']}<br>
+                    {project_info['name']} {project_info['version']} - {project_info['build_date']}<br>
+                    基于 {project_info['license']} 许可证发布
+                </p>
+            </div>
         </div>
         """)
+
+        # 设置链接可点击
+        about_text.setOpenExternalLinks(True)
         about_layout.addWidget(about_text)
         
         # 底部设置区域
@@ -590,11 +758,25 @@ class MainWindow(QMainWindow):
         self.notify_cb.setStyleSheet("QCheckBox { color: #333; }")
         bottom_layout.addWidget(self.notify_cb)
         
+        # 任务栏进度条选项
+        self.taskbar_progress_cb = QCheckBox("任务栏进度条")
+        self.taskbar_progress_cb.setChecked(self.settings.get("show_taskbar_progress", True))
+        self.taskbar_progress_cb.setStyleSheet("QCheckBox { color: #333; }")
+        self.taskbar_progress_cb.toggled.connect(self.toggle_taskbar_progress)
+        
+        # 如果系统不支持任务栏进度条，禁用复选框
+        if not HAS_WIN_EXTRAS:
+            self.taskbar_progress_cb.setEnabled(False)
+            self.taskbar_progress_cb.setToolTip("当前系统不支持任务栏进度条或缺少PyQt5.QtWinExtras模块")
+        
+        bottom_layout.addWidget(self.taskbar_progress_cb)
+        
         bottom_layout.addStretch()
         
         # 版本信息
-        version_label = QLabel("v1.1")
+        version_label = QLabel(f"v{ProjectInfo.VERSION}")
         version_label.setStyleSheet("color: #999; font-size: 10px;")
+        version_label.setToolTip(f"构建日期: {ProjectInfo.BUILD_DATE}")
         bottom_layout.addWidget(version_label)
         
         main_layout.addWidget(bottom_frame)
@@ -635,6 +817,7 @@ class MainWindow(QMainWindow):
         self.mouse_thread.update_count.connect(self.update_count)
         self.mouse_thread.update_next_time.connect(self.update_next_time)
         self.mouse_thread.update_direction.connect(self.update_last_direction)
+        self.mouse_thread.update_progress_value.connect(self.update_taskbar_progress)
         
     def load_settings_to_ui(self):
         """加载设置到UI"""
@@ -678,16 +861,103 @@ class MainWindow(QMainWindow):
             "move_distance": self.distance_spin.value(),
             "auto_start": self.auto_start_cb.isChecked(),
             "show_notifications": self.notify_cb.isChecked(),
+            "show_taskbar_progress": self.taskbar_progress_cb.isChecked(),
             "window_geometry": geometry.toBase64().data().decode() if geometry else None,
             "window_state": self.saveState().toBase64().data().decode() if self.saveState() else None
         })
         
         self.settings_manager.save_settings(self.settings)
         
+    def init_taskbar_progress(self):
+        """初始化任务栏进度条"""
+        if not HAS_WIN_EXTRAS or not self.taskbar_progress_cb.isChecked():
+            return
+            
+        self.log_message("正在初始化任务栏进度条...")
+        
+        try:
+            # 创建任务栏按钮
+            self.taskbar_button = QWinTaskbarButton(self)
+            
+            # 获取进度条对象
+            self.taskbar_progress = self.taskbar_button.progress()
+            
+            # 初始状态
+            self.taskbar_progress.setVisible(False)
+            self.taskbar_progress.setRange(0, 100)
+            self.taskbar_progress.setValue(0)
+            
+            self.log_message("✓ 任务栏进度条初始化完成")
+            
+            # 窗口显示后设置窗口句柄关联
+            QTimer.singleShot(500, self.setup_window_handle)
+            
+        except Exception as e:
+            self.log_message(f"✗ 任务栏进度条初始化失败: {e}")
+            self.taskbar_button = None
+            self.taskbar_progress = None
+            
+    def setup_window_handle(self):
+        """设置窗口句柄关联"""
+        if not self.taskbar_button or not self.taskbar_progress_cb.isChecked():
+            return
+            
+        try:
+            # 获取窗口句柄
+            window_handle = self.windowHandle()
+            if window_handle:
+                # 设置关联
+                self.taskbar_button.setWindow(window_handle)
+                self.log_message("✓ 任务栏进度条窗口句柄已关联")
+        except Exception as e:
+            self.log_message(f"✗ 设置窗口句柄失败: {e}")
+            
+    def show_taskbar_progress(self):
+        """显示任务栏进度条"""
+        if self.taskbar_progress and self.taskbar_progress_cb.isChecked():
+            try:
+                self.taskbar_progress.setVisible(True)
+                self.taskbar_progress.resume()
+            except Exception as e:
+                self.log_message(f"✗ 显示任务栏进度条失败: {e}")
+                
+    def hide_taskbar_progress(self):
+        """隐藏任务栏进度条"""
+        if self.taskbar_progress:
+            try:
+                self.taskbar_progress.setVisible(False)
+                self.taskbar_progress.stop()
+            except Exception as e:
+                pass  # 隐藏失败不影响主要功能
+                
+    def update_taskbar_progress(self, value):
+        """更新任务栏进度条"""
+        if self.taskbar_progress and self.taskbar_progress_cb.isChecked():
+            try:
+                if not self.taskbar_progress.isVisible():
+                    self.taskbar_progress.setVisible(True)
+                self.taskbar_progress.setValue(value)
+            except Exception:
+                pass  # 更新失败不影响主要功能
+                
+    def toggle_taskbar_progress(self, checked):
+        """切换任务栏进度条显示"""
+        if checked:
+            if not self.taskbar_button:
+                self.init_taskbar_progress()
+            elif self.mouse_thread.is_running and not self.mouse_thread.is_paused:
+                self.show_taskbar_progress()
+        else:
+            self.hide_taskbar_progress()
+            
     def start_simulation(self):
         """开始模拟"""
         # 保存设置
         self.save_ui_settings()
+        
+        # 初始化任务栏进度条（如果需要）
+        if self.taskbar_progress_cb.isChecked() and not self.taskbar_button:
+            self.init_taskbar_progress()
         
         # 获取参数
         direction_map = {
@@ -719,6 +989,9 @@ class MainWindow(QMainWindow):
         self.pause_btn.setEnabled(True)
         self.stop_btn.setEnabled(True)
         
+        # 显示任务栏进度条
+        self.show_taskbar_progress()
+        
         self.log_message("▶ 开始运行")
         self.update_status("运行中")
         
@@ -733,12 +1006,16 @@ class MainWindow(QMainWindow):
                 self.mouse_thread.resume()
                 self.pause_btn.setText("⏸️ 暂停")
                 self.log_message("▶ 恢复运行")
+                # 恢复时显示进度条
+                self.show_taskbar_progress()
                 if self.notify_cb.isChecked():
                     self.statusBar().showMessage("恢复运行", 2000)
             else:
                 self.mouse_thread.pause()
                 self.pause_btn.setText("▶ 继续")
                 self.log_message("⏸️ 暂停运行")
+                # 暂停时隐藏进度条
+                self.hide_taskbar_progress()
                 if self.notify_cb.isChecked():
                     self.statusBar().showMessage("已暂停", 2000)
         
@@ -753,6 +1030,9 @@ class MainWindow(QMainWindow):
         self.pause_btn.setEnabled(False)
         self.stop_btn.setEnabled(False)
         self.pause_btn.setText("⏸️ 暂停")
+        
+        # 隐藏任务栏进度条
+        self.hide_taskbar_progress()
         
         self.progress_bar.setValue(0)
         self.log_message("⏹️ 停止运行")
@@ -868,6 +1148,18 @@ class MainWindow(QMainWindow):
         if self.notify_cb.isChecked():
             self.statusBar().showMessage("统计已重置", 2000)
         
+    def showEvent(self, event):
+        """显示事件"""
+        super().showEvent(event)
+        
+        # 初始化任务栏进度条（如果需要）
+        if self.taskbar_progress_cb.isChecked() and not self.taskbar_button:
+            self.init_taskbar_progress()
+        
+        # 如果设置了自动启动
+        if self.auto_start_cb.isChecked() and not self.mouse_thread.isRunning():
+            QTimer.singleShot(500, self.start_simulation)
+            
     def closeEvent(self, event: QCloseEvent):
         """关闭事件"""
         reply = QMessageBox.question(
@@ -891,6 +1183,9 @@ class MainWindow(QMainWindow):
             self.mouse_thread.stop()
             self.mouse_thread.wait()
             
+        # 隐藏任务栏进度条
+        self.hide_taskbar_progress()
+        
         # 保存设置
         self.save_ui_settings()
         
@@ -901,13 +1196,6 @@ class MainWindow(QMainWindow):
         """调整窗口大小事件"""
         super().resizeEvent(event)
         # 可以在这里处理窗口大小变化
-        
-    def showEvent(self, event):
-        """显示事件"""
-        super().showEvent(event)
-        # 如果设置了自动启动
-        if self.auto_start_cb.isChecked() and not self.mouse_thread.isRunning():
-            QTimer.singleShot(500, self.start_simulation)
 
 def main():
     """主函数"""
@@ -923,8 +1211,18 @@ def main():
             pass
     
     app = QApplication(sys.argv)
-    app.setApplicationName("鼠标模拟器")
+    
+    # 设置应用程序元数据（使用ProjectInfo类中的信息）
+    app.setApplicationName(ProjectInfo.NAME)
+    app.setApplicationDisplayName(f"{ProjectInfo.NAME} {ProjectInfo.VERSION}")
+    app.setApplicationVersion(ProjectInfo.VERSION)
     app.setOrganizationName("MouseSimulator")
+    app.setOrganizationDomain(ProjectInfo.URL.replace("https://", ""))
+    
+    # 设置窗口图标（如果存在）
+    icon_path = "icon.ico"
+    if os.path.exists(icon_path):
+        app.setWindowIcon(QIcon(icon_path))
     
     # 设置应用字体
     font = QFont("Microsoft YaHei", 9)
@@ -939,10 +1237,10 @@ def main():
             geometry_data = bytes.fromhex(window.settings["window_geometry"])
             window.restoreGeometry(geometry_data)
         except:
-            window.resize(550, 650)
+            window.resize(550, 700)
             window.center_on_screen()
     else:
-        window.resize(550, 650)
+        window.resize(550, 700)
         window.center_on_screen()
     
     # 恢复窗口状态
